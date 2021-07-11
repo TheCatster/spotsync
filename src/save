@@ -1,0 +1,4 @@
+use chrono::{Local, DateTime, TimeZone};
+
+let dt: DateTime<Local> = Local::now();
+let dt: DateTime<Local> = Local.timestamp(0, 0);
