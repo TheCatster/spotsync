@@ -5,12 +5,30 @@ use aspotify::{
 use chrono::Local;
 use fern::{log_file, Dispatch};
 use log::{debug, error, info, log_enabled, Level};
+use ron::de;
+use std::process::Command;
 use std::{
     env, fs,
     io::{self, Write},
 };
+use ron::de::from_reader;
+use serde::Deserialize;
+use std::{collections::HashMap, fs::File};
 
 mod tests;
+
+#[derive(Debug, Deserialize)]
+struct Playlist {
+    title: String,
+    songs: Vec<Song>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Song {
+    title: String,
+    artists: Vec<String>,
+    album: String,
+}
 
 #[tokio::main]
 async fn main() {
@@ -39,35 +57,14 @@ async fn main() {
     // Fetch remote playlists
     let spotify_playlists = retrieve_spotify_users_playlists(&client, 10).await;
 
-    // Creating the local playlist if necessary
+    // Main logic
     for playlist in &spotify_playlists {
-        local_playlist_make_dir_if_not_exists(&playlist.name);
+        local_playlist_make_if_not_exists(playlist);
+        let _local_songs = local_playlist_read_songs(&client, playlist).await;
+        let _spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
+        // let needed_songs: Vec<String> = compare_playlists();
+        // download_songs_and_update_ron();
     }
-
-    // Fetching list of songs locally
-    let local_songs: Vec<Vec<String>> = spotify_playlists
-        .iter()
-        .map(|x| local_playlist_read_songs(&x.name))
-        .collect();
-    println!("{:?}", local_songs);
-
-    // Why doesn't this work? What's the difference between this and the for loop?
-    // let spotify_songs = spotify_playlists
-    //     .iter()
-    //     .map(|x| async move {
-    //         spotify_playlist_read_songs(&client, &x).await
-    //     });
-
-    // Fetching list of songs on Spotify
-    let mut spotify_songs: Vec<Vec<String>> = Vec::new();
-
-    for spotify_playlist in spotify_playlists {
-        spotify_songs.push(spotify_playlist_read_songs(&client, &spotify_playlist).await)
-    }
-
-    // Compare PlaylistSimplified
-
-    // Download missing songs
 }
 
 async fn authenticate_spotify() -> Client {
@@ -109,8 +106,8 @@ async fn authenticate_spotify() -> Client {
                     Scope::UserFollowRead,
                     Scope::UserFollowModify,
                 ]
-                .iter()
-                .copied(),
+                    .iter()
+                    .copied(),
                 false,
                 "http://localhost:8888/callback",
             );
@@ -131,7 +128,7 @@ async fn authenticate_spotify() -> Client {
                     .await
                     .expect("Could not obtain refresh token from Spotify!"),
             )
-            .expect("Unable to write to refresh token file, possibly no permission?");
+                .expect("Unable to write to refresh token file, possibly no permission?");
 
             client
         }
@@ -141,7 +138,7 @@ async fn authenticate_spotify() -> Client {
 async fn spotify_playlist_read_songs(
     client: &Client,
     playlist: &PlaylistSimplified,
-) -> Vec<String> {
+) -> Vec<Song> {
     // Why is this so ugly!? There has to be a better way.
     client
         .playlists()
@@ -153,14 +150,28 @@ async fn spotify_playlist_read_songs(
         .items
         .iter()
         .map(|playlist_item| {
-            let song = match playlist_item.item.as_ref().expect("No such playlist item!") {
+            let song_title = match playlist_item.item.as_ref().expect("No such playlist item!") {
                 aspotify::PlaylistItemType::Track(track) => &track.name,
                 _ => "Track not found",
             };
 
-            song.to_string()
+            let song_artists = match playlist_item.item.as_ref().expect("No such playlist item!") {
+                aspotify::PlaylistItemType::Track(track) => track.artists.iter().map(|x| x.name.to_string()).collect::<Vec<String>>(),
+                _ => vec!["Artists not found".to_string()],
+            };
+
+            let song_album = match playlist_item.item.as_ref().expect("No such playlist item!") {
+                aspotify::PlaylistItemType::Track(track) => &track.album.name,
+                _ => "Track not found",
+            };
+
+            Song {
+                title: song_title.to_string(),
+                artists: song_artists,
+                album: song_album.to_string(),
+            }
         })
-        .collect::<Vec<String>>()
+        .collect::<Vec<Song>>()
 }
 
 async fn retrieve_spotify_users_playlists(
@@ -176,42 +187,61 @@ async fn retrieve_spotify_users_playlists(
         .items
 }
 
-fn local_playlist_make_dir_if_not_exists(dir_name: &str) {
+fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified) {
+    // Create directory if it doesn't exist
     let mut path = env::current_dir().expect("Could not read current directory!");
-    path.push(format!("./music/{}", dir_name));
+    path.push(format!("./music/{}", &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
+        println!("Creating playlist directory!");
         let mut path = env::current_dir().expect("Could not read current directory!");
-        let playlist_dir = format!("./music/{}", dir_name);
+        let playlist_dir = format!("./music/{}", &playlist.name);
         path.push(playlist_dir);
         std::fs::create_dir_all(path).unwrap();
     };
+
+    // Create playlists' data directory if not available
+    let mut path = env::current_dir().expect("Could not read current directory!");
+    path.push("data/playlists/");
+    let metadata = fs::metadata(path);
+    if metadata.is_err() {
+        println!("Creating playlist directory!");
+        let mut path = env::current_dir().expect("Could not read current directory!");
+        path.push("data/playlists/");
+        std::fs::create_dir_all(path).unwrap();
+    };
+
+    // Create RON if it doesn't exist
+    let mut path = env::current_dir().expect("Could not read current directory!");
+    path.push(format!("data/playlists/\"{}\".ron", &playlist.name));
+    let metadata = fs::metadata(path);
+    if metadata.is_err() {
+        println!("Creating playlist RON file!");
+        let mut path = env::current_dir().expect("Could not read current directory!");
+        let playlist_ron = format!("data/playlists/\"{}\".ron", &playlist.name);
+        path.push(playlist_ron);
+        println!("{:?}", &path);
+        std::fs::File::create(path).unwrap();
+    };
 }
 
-fn local_playlist_read_songs(playlist: &str) -> Vec<String> {
-    let paths = fs::read_dir(&format!("./music/{}", playlist)).unwrap();
+async fn local_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) {
+    let input_path = format!("data/playlists/\"{}\".ron", &playlist.name);
+    let f = File::open(&input_path).expect("Failed opening file");
+    let config: Playlist = match from_reader(f) {
+        Ok(x) => x,
+        Err(e) => {
+            create_playlist_ron(&client, &playlist).await;
+            println!("Failed to load config: {}", e);
 
-    paths
-        .map(|x| {
-            let mut filename = x
-                .as_ref()
-                .unwrap()
-                .file_name()
-                .into_string()
-                .expect("Cannot convert filename into valid UTF-8 string!");
+            std::process::exit(1);
+        }
+    };
 
-            let extension = String::from(
-                x.unwrap()
-                    .path()
-                    .extension()
-                    .expect("Cannot convert filename into valid UTF-8 string!")
-                    .to_str()
-                    .expect("Cannot convert filename into valid UTF-8 string!"),
-            );
+    println!("Config: {:?}", &config);
+}
 
-            filename.remove_matches(&format!(".{}", extension));
-
-            filename
-        })
-        .collect()
+async fn create_playlist_ron(client: &Client, playlist: &PlaylistSimplified) {
+    let songs: Vec<Song> = spotify_playlist_read_songs(client, playlist).await;
+    println!("{:?}", songs);
 }
