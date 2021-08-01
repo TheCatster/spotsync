@@ -1,29 +1,30 @@
 #![feature(string_remove_matches)]
-use aspotify::{
-    authorization_url, Client, ClientCredentials, PlaylistSimplified, Scope, TwoWayCursorPage,
-};
-use chrono::Local;
+use aspotify::{authorization_url, Client, ClientCredentials, PlaylistSimplified, Scope};
+
 use fern::{log_file, Dispatch};
-use log::{debug, error, info, log_enabled, Level};
-use ron::de;
-use std::process::Command;
+use log::{info, LevelFilter};
+
+use ron::{
+    de::from_reader,
+    ser::{to_string_pretty, PrettyConfig},
+};
+use serde::{Deserialize, Serialize};
+
 use std::{
-    env, fs,
+    env,
+    fs::{self, write, File},
     io::{self, Write},
 };
-use ron::de::from_reader;
-use serde::Deserialize;
-use std::{collections::HashMap, fs::File};
 
 mod tests;
 
-#[derive(Debug, Deserialize)]
-struct Playlist {
+#[derive(Debug, Serialize, Deserialize)]
+struct PlaylistConfig {
     title: String,
     songs: Vec<Song>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Song {
     title: String,
     artists: Vec<String>,
@@ -32,7 +33,7 @@ struct Song {
 
 #[tokio::main]
 async fn main() {
-    fern::Dispatch::new()
+    Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
                 "{}[{}][{}] {}",
@@ -42,12 +43,9 @@ async fn main() {
                 message
             ))
         })
-        .level(log::LevelFilter::Error)
-        .chain(std::io::stdout())
-        .chain(
-            fern::log_file("spotsync.log")
-                .expect("No permission to write to the current directory."),
-        )
+        .level(LevelFilter::Error)
+        .chain(io::stdout())
+        .chain(log_file("spotsync.log").expect("No permission to write to the current directory."))
         .apply()
         .expect("Failed to dispatch Fern logger!");
 
@@ -106,8 +104,8 @@ async fn authenticate_spotify() -> Client {
                     Scope::UserFollowRead,
                     Scope::UserFollowModify,
                 ]
-                    .iter()
-                    .copied(),
+                .iter()
+                .copied(),
                 false,
                 "http://localhost:8888/callback",
             );
@@ -121,24 +119,21 @@ async fn authenticate_spotify() -> Client {
 
             client.redirected(&redirect, &state).await.unwrap();
 
-            fs::write(
+            write(
                 ".refresh_token",
                 client
                     .refresh_token()
                     .await
                     .expect("Could not obtain refresh token from Spotify!"),
             )
-                .expect("Unable to write to refresh token file, possibly no permission?");
+            .expect("Unable to write to refresh token file, possibly no permission?");
 
             client
         }
     }
 }
 
-async fn spotify_playlist_read_songs(
-    client: &Client,
-    playlist: &PlaylistSimplified,
-) -> Vec<Song> {
+async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) -> Vec<Song> {
     // Why is this so ugly!? There has to be a better way.
     client
         .playlists()
@@ -156,7 +151,11 @@ async fn spotify_playlist_read_songs(
             };
 
             let song_artists = match playlist_item.item.as_ref().expect("No such playlist item!") {
-                aspotify::PlaylistItemType::Track(track) => track.artists.iter().map(|x| x.name.to_string()).collect::<Vec<String>>(),
+                aspotify::PlaylistItemType::Track(track) => track
+                    .artists
+                    .iter()
+                    .map(|x| x.name.to_string())
+                    .collect::<Vec<String>>(),
                 _ => vec!["Artists not found".to_string()],
             };
 
@@ -193,7 +192,6 @@ fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified) {
     path.push(format!("./music/{}", &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        println!("Creating playlist directory!");
         let mut path = env::current_dir().expect("Could not read current directory!");
         let playlist_dir = format!("./music/{}", &playlist.name);
         path.push(playlist_dir);
@@ -205,7 +203,6 @@ fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified) {
     path.push("data/playlists/");
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        println!("Creating playlist directory!");
         let mut path = env::current_dir().expect("Could not read current directory!");
         path.push("data/playlists/");
         std::fs::create_dir_all(path).unwrap();
@@ -216,32 +213,40 @@ fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified) {
     path.push(format!("data/playlists/\"{}\".ron", &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        println!("Creating playlist RON file!");
         let mut path = env::current_dir().expect("Could not read current directory!");
         let playlist_ron = format!("data/playlists/\"{}\".ron", &playlist.name);
         path.push(playlist_ron);
-        println!("{:?}", &path);
-        std::fs::File::create(path).unwrap();
+        File::create(path).unwrap();
     };
 }
 
-async fn local_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) {
+async fn local_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) -> Vec<Song> {
     let input_path = format!("data/playlists/\"{}\".ron", &playlist.name);
     let f = File::open(&input_path).expect("Failed opening file");
-    let config: Playlist = match from_reader(f) {
-        Ok(x) => x,
-        Err(e) => {
-            create_playlist_ron(&client, &playlist).await;
-            println!("Failed to load config: {}", e);
-
-            std::process::exit(1);
-        }
+    let playlist_ron: Result<PlaylistConfig, ron::Error> = from_reader(f);
+    let playlist_struct: Vec<Song> = match playlist_ron {
+        Ok(x) => x.songs,
+        Err(_) => create_playlist_ron(client, playlist).await.songs,
     };
 
-    println!("Config: {:?}", &config);
+    playlist_struct
 }
 
-async fn create_playlist_ron(client: &Client, playlist: &PlaylistSimplified) {
+async fn create_playlist_ron(client: &Client, playlist: &PlaylistSimplified) -> PlaylistConfig {
     let songs: Vec<Song> = spotify_playlist_read_songs(client, playlist).await;
-    println!("{:?}", songs);
+    let playlist_struct = PlaylistConfig {
+        title: playlist.name.to_string(),
+        songs,
+    };
+
+    let pretty = PrettyConfig::new()
+        .with_depth_limit(4)
+        .with_separate_tuple_members(true)
+        .with_enumerate_arrays(true);
+    let playlist_ron = to_string_pretty(&playlist_struct, pretty).expect("Serialization failed");
+
+    let playlist_file = format!("data/playlists/\"{}\".ron", &playlist.name);
+    write(playlist_file, playlist_ron).unwrap();
+
+    playlist_struct
 }
