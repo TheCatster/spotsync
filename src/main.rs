@@ -1,4 +1,4 @@
-#![feature(string_remove_matches)]
+#![feature(string_remove_matches, slice_partition_dedup)]
 use aspotify::{authorization_url, Client, ClientCredentials, PlaylistSimplified, Scope};
 
 use fern::{log_file, Dispatch};
@@ -9,11 +9,14 @@ use ron::{
     ser::{to_string_pretty, PrettyConfig},
 };
 use serde::{Deserialize, Serialize};
+use itertools::Itertools;
 
 use std::{
     env,
     fs::{self, write, File},
     io::{self, Write},
+    cmp::Ordering,
+    hash::Hash,
 };
 
 mod tests;
@@ -24,11 +27,31 @@ struct PlaylistConfig {
     songs: Vec<Song>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 struct Song {
     title: String,
     artists: Vec<String>,
     album: String,
+}
+
+impl PartialEq for Song {
+    fn eq(&self, other: &Self) -> bool {
+        self.title == other.title && self.album == other.album && self.artists == other.artists
+    }
+}
+
+impl Eq for Song {}
+
+impl PartialOrd for Song {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Song {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.title.cmp(&other.title)
+    }
 }
 
 #[tokio::main]
@@ -58,10 +81,21 @@ async fn main() {
     // Main logic
     for playlist in &spotify_playlists {
         local_playlist_make_if_not_exists(playlist);
-        let _local_songs = local_playlist_read_songs(&client, playlist).await;
-        let _spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
-        // let needed_songs: Vec<String> = compare_playlists();
-        // download_songs_and_update_ron();
+        let local_songs = local_playlist_read_songs(&client, playlist).await;
+        let spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
+        let needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs, &playlist.name).await;
+        if !needed_songs.is_empty() {
+            // download_songs_and_update_ron(&needed_songs).await;
+        }
+    }
+}
+
+async fn compare_playlists(local: &[Song], remote: &[Song], playlist_title: &str) -> Vec<Song> {
+    println!("{}: {:?}", playlist_title, local == remote);
+    if local == remote {
+        vec![]
+    } else {
+        [local, remote].concat().iter().unique().map(|s| s.to_owned()).collect::<Vec<_>>()
     }
 }
 
