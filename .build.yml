@@ -1,0 +1,14 @@
+image: archlinux
+packages:
+  - emacs-nox
+sources:
+  - https://git.sr.ht/~thecatster/spotsync
+secrets:
+  - ce367b13-e336-48c8-9b7d-44c534238825
+now
+tasks:
+  - mirror: |
+      cd spotsync
+      git remote add github git@github.com:thecatster/spotsync
+      ssh-keyscan github.com >> ~/.ssh/known_hosts
+      git push -f github master

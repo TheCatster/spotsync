@@ -10,6 +10,7 @@ use ron::{
 };
 use serde::{Deserialize, Serialize};
 use itertools::Itertools;
+use anyhow::Result;
 
 use std::{
     env,
@@ -32,6 +33,7 @@ struct Song {
     title: String,
     artists: Vec<String>,
     album: String,
+    spotify_id: String,
 }
 
 impl PartialEq for Song {
@@ -85,9 +87,18 @@ async fn main() {
         let spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
         let needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs, &playlist.name).await;
         if !needed_songs.is_empty() {
-            // download_songs_and_update_ron(&needed_songs).await;
+            download_songs(&needed_songs).await;
+            update_ron(&needed_songs).await;
         }
     }
+}
+
+async fn download_songs(_songs: &[Song]) {
+
+}
+
+async fn update_ron(_songs: &[Song]) {
+
 }
 
 async fn compare_playlists(local: &[Song], remote: &[Song], playlist_title: &str) -> Vec<Song> {
@@ -167,7 +178,7 @@ async fn authenticate_spotify() -> Client {
     }
 }
 
-async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) -> Vec<Song> {
+async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) -> Result<Vec<Song>> {
     // Why is this so ugly!? There has to be a better way.
     client
         .playlists()
@@ -198,10 +209,16 @@ async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplif
                 _ => "Track not found",
             };
 
+            let song_id = match playlist_item.item.as_ref().expect("No such playlist item!") {
+                aspotify::PlaylistItemType::Track(track) => track.id,
+                _ => String::from("Track not found"),
+            };
+
             Song {
                 title: song_title.to_string(),
                 artists: song_artists,
                 album: song_album.to_string(),
+                spotify_id: song_id,
             }
         })
         .collect::<Vec<Song>>()
