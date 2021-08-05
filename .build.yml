@@ -4,7 +4,7 @@ packages:
 sources:
   - https://git.sr.ht/~thecatster/spotsync
 secrets:
-  - ce367b13-e336-48c8-9b7d-44c534238825
+  - 3ec8d6c4-470d-4198-8b1c-b3c772f8fff3
 tasks:
   - mirror: |
       cd spotsync
