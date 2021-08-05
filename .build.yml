@@ -1,6 +1,4 @@
 image: archlinux
-packages:
-  - emacs-nox
 sources:
   - https://git.sr.ht/~thecatster/spotsync
 secrets:
