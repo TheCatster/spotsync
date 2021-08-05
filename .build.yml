@@ -5,7 +5,6 @@ sources:
   - https://git.sr.ht/~thecatster/spotsync
 secrets:
   - ce367b13-e336-48c8-9b7d-44c534238825
-now
 tasks:
   - mirror: |
       cd spotsync
