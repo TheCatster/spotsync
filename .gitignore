@@ -5,6 +5,7 @@
 # Spotify API Refresh Token
 .refresh_token
 .env
+/data/*
 
 # Log files
 spotsync.log
