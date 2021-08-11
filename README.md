@@ -25,6 +25,9 @@ the program enters alpha.
 SpotSync requires `ytmdl` installed on your system, and accessible to
 the program.
 
+A PR is open to allow for custom outputs, but as of now it is necessary
+to use my fork of the program at [my GitHub (*at add-output-argument*)](https://github.com/TheCatster/ytmdl).
+
 ## Usage
 TODO
 
