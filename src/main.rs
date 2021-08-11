@@ -2,21 +2,26 @@
 use aspotify::{authorization_url, Client, ClientCredentials, PlaylistSimplified, Scope};
 
 use fern::{log_file, Dispatch};
-use log::{info, LevelFilter};
+use log::{info, warn, LevelFilter};
 
+use anyhow::{Context, Result};
+
+use dirs::home_dir;
+use itertools::Itertools;
 use ron::{
     de::from_reader,
     ser::{to_string_pretty, PrettyConfig},
 };
 use serde::{Deserialize, Serialize};
-use itertools::Itertools;
 
 use std::{
+    cmp::Ordering,
     env,
     fs::{self, write, File},
+    hash::{Hash, Hasher},
     io::{self, Write},
-    cmp::Ordering,
-    hash::Hash,
+    path::PathBuf,
+    process::Command,
 };
 
 mod tests;
@@ -27,11 +32,12 @@ struct PlaylistConfig {
     songs: Vec<Song>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Song {
     title: String,
     artists: Vec<String>,
     album: String,
+    id: String,
 }
 
 impl PartialEq for Song {
@@ -54,8 +60,14 @@ impl Ord for Song {
     }
 }
 
+impl Hash for Song {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.title.hash(hasher);
+    }
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -75,27 +87,82 @@ async fn main() {
     let client = authenticate_spotify().await;
     info!("Connecting to Spotify API...");
 
+    let dir =
+        env::var("SONG_DIR").context("SONG_DIR variable not set! Make sure your .env has it.")?;
+    let song_dir = if dir.starts_with('~') {
+        let mut song_dir = home_dir().unwrap();
+        song_dir.push(dir.strip_prefix("~/").unwrap());
+        song_dir
+            .into_os_string()
+            .into_string()
+            .expect("Song directory invalid!")
+    } else {
+        dir.to_owned()
+    };
+
+    let song_format = env::var("SONG_FORMAT")
+        .context("SONG_FORMAT variable not set! Make sure your .env has it.")?;
+
     // Fetch remote playlists
     let spotify_playlists = retrieve_spotify_users_playlists(&client, 10).await;
 
     // Main logic
     for playlist in &spotify_playlists {
-        local_playlist_make_if_not_exists(playlist);
-        let local_songs = local_playlist_read_songs(&client, playlist).await;
+        local_playlist_make_if_not_exists(playlist, &song_dir);
+        let local_songs =
+            local_playlist_read_songs(&client, playlist, &song_dir, &song_format).await?;
         let spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
-        let needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs, &playlist.name).await;
+        let needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs).await;
         if !needed_songs.is_empty() {
-            // download_songs_and_update_ron(&needed_songs).await;
+            download_songs(&playlist.name, &song_dir, &song_format, &needed_songs).await?;
+            update_ron(&needed_songs).await;
         }
     }
+
+    Ok(())
 }
 
-async fn compare_playlists(local: &[Song], remote: &[Song], playlist_title: &str) -> Vec<Song> {
-    println!("{}: {:?}", playlist_title, local == remote);
+async fn download_songs(
+    playlist_title: &str,
+    song_dir: &str,
+    song_format: &str,
+    songs: &[Song],
+) -> Result<()> {
+    for song in songs {
+        let song_id = song.id.to_owned();
+
+        let ytmdl = Command::new("ytmdl")
+            .arg("-q")
+            .arg(format!("--output={}/{}", song_dir, playlist_title))
+            .arg(format!("--spotify-id={}", song_id))
+            .arg(format!("--format={}", song_format))
+            .arg(format!("{} {}", &song.title, &song.artists.join(" ")))
+            .spawn()?;
+
+        let output = ytmdl.wait_with_output()?;
+
+        if !output.status.success() {
+            warn!("ytmdl failed to download the song!");
+        }
+
+        info!("Successfully downloaded song: {}", song.title);
+    }
+
+    Ok(())
+}
+
+async fn update_ron(_songs: &[Song]) {}
+
+async fn compare_playlists(local: &[Song], remote: &[Song]) -> Vec<Song> {
     if local == remote {
         vec![]
     } else {
-        [local, remote].concat().iter().unique().map(|s| s.to_owned()).collect::<Vec<_>>()
+        [local, remote]
+            .concat()
+            .iter()
+            .unique()
+            .map(|s| s.to_owned())
+            .collect::<Vec<_>>()
     }
 }
 
@@ -179,13 +246,13 @@ async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplif
         .items
         .iter()
         .map(|playlist_item| {
-            let song_title = match playlist_item.item.as_ref().expect("No such playlist item!") {
-                aspotify::PlaylistItemType::Track(track) => &track.name,
+            let song_title = match playlist_item.item.as_ref() {
+                Some(aspotify::PlaylistItemType::Track(track)) => &track.name,
                 _ => "Track not found",
             };
 
-            let song_artists = match playlist_item.item.as_ref().expect("No such playlist item!") {
-                aspotify::PlaylistItemType::Track(track) => track
+            let song_artists = match playlist_item.item.as_ref() {
+                Some(aspotify::PlaylistItemType::Track(track)) => track
                     .artists
                     .iter()
                     .map(|x| x.name.to_string())
@@ -193,16 +260,32 @@ async fn spotify_playlist_read_songs(client: &Client, playlist: &PlaylistSimplif
                 _ => vec!["Artists not found".to_string()],
             };
 
-            let song_album = match playlist_item.item.as_ref().expect("No such playlist item!") {
-                aspotify::PlaylistItemType::Track(track) => &track.album.name,
+            let song_album = match playlist_item.item.as_ref() {
+                Some(aspotify::PlaylistItemType::Track(track)) => &track.album.name,
                 _ => "Track not found",
+            };
+
+            let song_id = match playlist_item.item.as_ref() {
+                Some(aspotify::PlaylistItemType::Track(track)) => track
+                    .id
+                    .as_ref()
+                    .expect("Local songs do not have a track ID!")
+                    .to_owned(),
+                _ => String::from("Track not found"),
             };
 
             Song {
                 title: song_title.to_string(),
                 artists: song_artists,
                 album: song_album.to_string(),
+                id: song_id,
             }
+        })
+        .filter(|song| {
+            (song.title != *String::from("Track not found"))
+                && (song.artists != vec!["Artists not found".to_string()])
+                && (song.album != *String::from("Track not found"))
+                && (song.id != *String::from("Track not found"))
         })
         .collect::<Vec<Song>>()
 }
@@ -220,54 +303,62 @@ async fn retrieve_spotify_users_playlists(
         .items
 }
 
-fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified) {
+fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified, song_dir: &str) {
     // Create directory if it doesn't exist
-    let mut path = env::current_dir().expect("Could not read current directory!");
-    path.push(format!("./music/{}", &playlist.name));
+    let path = PathBuf::from(format!("{}/{}", song_dir, &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        let mut path = env::current_dir().expect("Could not read current directory!");
-        let playlist_dir = format!("./music/{}", &playlist.name);
-        path.push(playlist_dir);
+        let path = PathBuf::from(format!("{}/{}", song_dir, &playlist.name));
         std::fs::create_dir_all(path).unwrap();
     };
 
     // Create playlists' data directory if not available
-    let mut path = env::current_dir().expect("Could not read current directory!");
-    path.push("data/playlists/");
+    let path = PathBuf::from(format!("data/playlists/{}", &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        let mut path = env::current_dir().expect("Could not read current directory!");
-        path.push("data/playlists/");
+        let path = PathBuf::from(format!("data/playlists/{}", &playlist.name));
         std::fs::create_dir_all(path).unwrap();
     };
 
     // Create RON if it doesn't exist
-    let mut path = env::current_dir().expect("Could not read current directory!");
-    path.push(format!("data/playlists/\"{}\".ron", &playlist.name));
+    let path = PathBuf::from(format!("data/playlists/\"{}\".ron", &playlist.name));
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        let mut path = env::current_dir().expect("Could not read current directory!");
-        let playlist_ron = format!("data/playlists/\"{}\".ron", &playlist.name);
-        path.push(playlist_ron);
+        let path = PathBuf::from(format!("data/playlists/\"{}\".ron", &playlist.name));
         File::create(path).unwrap();
     };
 }
 
-async fn local_playlist_read_songs(client: &Client, playlist: &PlaylistSimplified) -> Vec<Song> {
+async fn local_playlist_read_songs(
+    client: &Client,
+    playlist: &PlaylistSimplified,
+    song_dir: &str,
+    song_format: &str,
+) -> Result<Vec<Song>> {
     let input_path = format!("data/playlists/\"{}\".ron", &playlist.name);
     let f = File::open(&input_path).expect("Failed opening file");
     let playlist_ron: Result<PlaylistConfig, ron::Error> = from_reader(f);
     let playlist_struct: Vec<Song> = match playlist_ron {
         Ok(x) => x.songs,
-        Err(_) => create_playlist_ron(client, playlist).await.songs,
+        Err(_) => {
+            create_playlist_ron(client, playlist, song_dir, song_format)
+                .await?
+                .songs
+        }
     };
 
-    playlist_struct
+    Ok(playlist_struct)
 }
 
-async fn create_playlist_ron(client: &Client, playlist: &PlaylistSimplified) -> PlaylistConfig {
+async fn create_playlist_ron(
+    client: &Client,
+    playlist: &PlaylistSimplified,
+    song_dir: &str,
+    song_format: &str,
+) -> Result<PlaylistConfig> {
     let songs: Vec<Song> = spotify_playlist_read_songs(client, playlist).await;
+    download_songs(&playlist.name, song_dir, song_format, &songs).await?;
+
     let playlist_struct = PlaylistConfig {
         title: playlist.name.to_string(),
         songs,
@@ -277,10 +368,10 @@ async fn create_playlist_ron(client: &Client, playlist: &PlaylistSimplified) -> 
         .with_depth_limit(4)
         .with_separate_tuple_members(true)
         .with_enumerate_arrays(true);
-    let playlist_ron = to_string_pretty(&playlist_struct, pretty).expect("Serialization failed");
+    let playlist_ron = to_string_pretty(&playlist_struct, pretty)?;
 
     let playlist_file = format!("data/playlists/\"{}\".ron", &playlist.name);
-    write(playlist_file, playlist_ron).unwrap();
+    write(playlist_file, playlist_ron)?;
 
-    playlist_struct
+    Ok(playlist_struct)
 }
