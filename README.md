@@ -60,7 +60,6 @@ the compose file without `.example` and customise to your needs.
 The following variables can be customised (and are also in the
 `.env.example`).
 
-# Get from Spotify Developer dashboard
 | ENVVAR | DEFAULT VALUE | COMMENT |
 |--------|---------------|---------|
 | `CLIENT_ID` | 1234567890 | Get this from Spotify Dashboard |
