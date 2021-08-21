@@ -59,3 +59,12 @@ the compose file without `.example` and customise to your needs.
 ## Configuration
 The following variables can be customised (and are also in the
 `.env.example`).
+
+# Get from Spotify Developer dashboard
+| ENVVAR | DEFAULT VALUE | COMMENT |
+|--------|---------------|---------|
+| `CLIENT_ID` | 1234567890 | Get this from Spotify Dashboard |
+| `CLIENT_SECRET` | 1234567890 | Get this from Spotify Dashboard |
+| `SONG_DIR` | ~/Music | No trailing slash! |
+| `SONG_FORMAT` | mp3 | Options: mp3, m4a, opus |
+| `CHECK_EVERY_DAYS` | 1 | Frequency to check playlists. Maximum of 7 days. |
