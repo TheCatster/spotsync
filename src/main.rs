@@ -25,8 +25,6 @@ use std::{
 };
 use tokio::time::sleep;
 
-mod tests;
-
 #[derive(Debug, Serialize, Deserialize)]
 struct PlaylistConfig {
     title: String,
