@@ -6,23 +6,24 @@ use log::{info, warn, LevelFilter};
 
 use anyhow::{Context, Result};
 
+use chrono::{Duration, Utc};
 use dirs::home_dir;
-use itertools::Itertools;
 use ron::{
     de::from_reader,
     ser::{to_string_pretty, PrettyConfig},
 };
 use serde::{Deserialize, Serialize};
-
 use std::{
     cmp::Ordering,
     env,
     fs::{self, write, File},
-    hash::{Hash, Hasher},
+    hash::Hash,
     io::{self, Write},
     path::PathBuf,
     process::Command,
+    time,
 };
+use tokio::time::sleep;
 
 mod tests;
 
@@ -32,7 +33,7 @@ struct PlaylistConfig {
     songs: Vec<Song>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, Hash, PartialEq)]
 struct Song {
     title: String,
     artists: Vec<String>,
@@ -40,29 +41,15 @@ struct Song {
     id: String,
 }
 
-impl PartialEq for Song {
-    fn eq(&self, other: &Self) -> bool {
-        self.title == other.title && self.album == other.album && self.artists == other.artists
+impl Ord for Song {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
     }
 }
-
-impl Eq for Song {}
 
 impl PartialOrd for Song {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl Ord for Song {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.title.cmp(&other.title)
-    }
-}
-
-impl Hash for Song {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.title.hash(hasher);
     }
 }
 
@@ -103,21 +90,62 @@ async fn main() -> Result<()> {
     let song_format = env::var("SONG_FORMAT")
         .context("SONG_FORMAT variable not set! Make sure your .env has it.")?;
 
+    let check_every_days = env::var("CHECK_EVERY_DAYS")
+        .context("CHECK_EVERY_DAYS variable not set! Make sure your .env has it.")?
+        .parse::<i64>()?;
+
     // Fetch remote playlists
     let spotify_playlists = retrieve_spotify_users_playlists(&client, 10).await;
 
     // Main logic
-    for playlist in &spotify_playlists {
-        local_playlist_make_if_not_exists(playlist, &song_dir);
-        let local_songs =
-            local_playlist_read_songs(&client, playlist, &song_dir, &song_format).await?;
-        let spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
-        let needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs).await;
-        if !needed_songs.is_empty() {
-            download_songs(&playlist.name, &song_dir, &song_format, &needed_songs).await?;
-            update_ron(&needed_songs).await;
+    loop {
+        let mut time_now = Utc::now();
+        let target_time = time_now
+            .checked_add_signed(Duration::days(check_every_days))
+            .expect("Unable to add to duration!");
+
+        for playlist in &spotify_playlists {
+            local_playlist_make_if_not_exists(playlist, &song_dir);
+            let local_songs =
+                local_playlist_read_songs(&client, playlist, &song_dir, &song_format).await?;
+            let spotify_songs = spotify_playlist_read_songs(&client, playlist).await;
+            let mut needed_songs: Vec<Song> = compare_playlists(&local_songs, &spotify_songs).await;
+            if !needed_songs.is_empty() {
+                download_songs(&playlist.name, &song_dir, &song_format, &needed_songs).await?;
+                info!("Updating RON for playlist: {}", &playlist.name);
+                update_ron(&playlist.name, &mut needed_songs).await?;
+            }
+        }
+
+        while time_now < target_time {
+            sleep(time::Duration::from_secs(900)).await;
+            time_now = Utc::now();
         }
     }
+}
+
+async fn update_ron(playlist_title: &str, songs: &mut [Song]) -> Result<()> {
+    let playlist_file = format!("data/playlists/\"{}\".ron", playlist_title);
+    let f = File::open(&playlist_file).expect("Failed opening playlist RON!");
+
+    let playlist: PlaylistConfig = from_reader(f)?;
+
+    let mut updated_songs = playlist.songs.to_vec();
+    updated_songs.append(&mut songs.to_vec());
+
+    let updated_playlist: PlaylistConfig = PlaylistConfig {
+        title: playlist.title,
+        songs: updated_songs,
+    };
+
+    let pretty = PrettyConfig::new()
+        .with_depth_limit(4)
+        .with_separate_tuple_members(true)
+        .with_enumerate_arrays(true);
+    let playlist_ron = to_string_pretty(&updated_playlist, pretty)?;
+
+    let playlist_file = format!("data/playlists/\"{}\".ron", playlist_title);
+    write(playlist_file, playlist_ron)?;
 
     Ok(())
 }
@@ -142,7 +170,7 @@ async fn download_songs(
         let output = ytmdl.wait_with_output()?;
 
         if !output.status.success() {
-            warn!("ytmdl failed to download the song!");
+            warn!("ytmdl failed to download the song! Ensure it is installed!");
         }
 
         info!("Successfully downloaded song: {}", song.title);
@@ -151,18 +179,18 @@ async fn download_songs(
     Ok(())
 }
 
-async fn update_ron(_songs: &[Song]) {}
-
 async fn compare_playlists(local: &[Song], remote: &[Song]) -> Vec<Song> {
     if local == remote {
         vec![]
     } else {
-        [local, remote]
-            .concat()
-            .iter()
-            .unique()
-            .map(|s| s.to_owned())
-            .collect::<Vec<_>>()
+        let mut unique_songs: Vec<Song> = vec![];
+        for song in remote {
+            if !local.contains(song) {
+                unique_songs.push(song.to_owned());
+            }
+        }
+
+        unique_songs
     }
 }
 
@@ -313,10 +341,10 @@ fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified, song_dir: &s
     };
 
     // Create playlists' data directory if not available
-    let path = PathBuf::from(format!("data/playlists/{}", &playlist.name));
+    let path = PathBuf::from("data/playlists");
     let metadata = fs::metadata(path);
     if metadata.is_err() {
-        let path = PathBuf::from(format!("data/playlists/{}", &playlist.name));
+        let path = PathBuf::from("data/playlists");
         std::fs::create_dir_all(path).unwrap();
     };
 
