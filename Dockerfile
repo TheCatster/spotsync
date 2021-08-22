@@ -12,6 +12,6 @@ USER root
 RUN apt update && apt install -y python3 python3-pip git ffmpeg
 RUN git clone https://github.com/deepjyoti30/ytmdl
 RUN cd ytmdl && git checkout unstable && pip3 install .
-RUN chown -R $(whoami) /
+RUN chown -R $(whoami) /.cache /root/.config
 
 ENTRYPOINT ["/app/spotsync"]
