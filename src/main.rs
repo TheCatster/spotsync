@@ -53,6 +53,14 @@ impl PartialOrd for Song {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Create data directory if not available
+    let path = PathBuf::from("data/playlists");
+    let metadata = fs::metadata(path);
+    if metadata.is_err() {
+        let path = PathBuf::from("data/playlists");
+        std::fs::create_dir_all(path).unwrap();
+    };
+
     Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -65,7 +73,7 @@ async fn main() -> Result<()> {
         })
         .level(LevelFilter::Error)
         .chain(io::stdout())
-        .chain(log_file("spotsync.log").expect("No permission to write to the current directory."))
+        .chain(log_file("data/spotsync.log").expect("No permission to write to the current directory."))
         .apply()
         .expect("Failed to dispatch Fern logger!");
 
@@ -198,14 +206,6 @@ async fn authenticate_spotify() -> Client {
     if dotenv_file.is_err() {
         warn!("Could not read env file! Assuming in docker.");
     }
-
-    // Create data directory if not available
-    let path = PathBuf::from("data/playlists");
-    let metadata = fs::metadata(path);
-    if metadata.is_err() {
-        let path = PathBuf::from("data/playlists");
-        std::fs::create_dir_all(path).unwrap();
-    };
 
     match std::fs::read_to_string("data/.refresh_token") {
         Ok(_) => {
