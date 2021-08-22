@@ -54,7 +54,7 @@ impl PartialOrd for Song {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create data directory if not available
-    let path = PathBuf::from("data/playlists");
+    let path = PathBuf::from("dataplaylists");
     let metadata = fs::metadata(path);
     if metadata.is_err() {
         let path = PathBuf::from("data/playlists");

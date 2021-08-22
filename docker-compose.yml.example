@@ -3,6 +3,7 @@ services:
   spotsync:
     build: .
     restart: unless-stopped
+    user: "1000:1000"
     volumes:
       - ./config:/app/data
       - ~/Music:/music
