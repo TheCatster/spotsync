@@ -1,9 +1,14 @@
 [package]
 name = "spotsync"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Daniel Rose <danielrose@member.fsf.org>"]
+description = "Sync your Spotify and local playlists."
+homepage = "https://sr.ht/~thecatster/spotsync"
+repository = "https://sr.ht/~thecatster/spotsync"
+license = "GPL-3.0"
+keywords = ["cli", "music", "docker"]
+readme="README.md"
 
 [dependencies]
 aspotify = { version = "0.7" }
