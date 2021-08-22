@@ -28,10 +28,8 @@ sources. `spotsync` helps you fill up your collection quickly and
 autonomously, at the cost of some minor accuracy and quality.
 
 ## Installation
-Currently SpotSync is only available by building it yourself, but
-don't you worry! Installations from the AUR, Docker Hub, prebuilt
-binaries for Windows, Debian, and more will be available as soon as
-the program enters alpha or maybe slightly later :)
+SpotSync can either be built on your own, or used via `docker` (docker
+is the only officially supported method).
 
 SpotSync requires `ytmdl` installed on your system, and accessible to
 the program.
@@ -54,16 +52,17 @@ the compose file without `.example` and customise to your needs.
 
 ## Usage
 ### Docker
-`docker-compose build`, and then just `docker-compose up -d`!
+- `docker-compose build` to build the image.
+- `docker-compose run spotsync sh` in order to generate `.refresh_token`.
+- And then just `docker-compose up -d`!
 
 ## Configuration
-The following variables can be customised (and are also in the
-`.env.example`).
+The following variables can be customised.
 
 | ENVVAR | DEFAULT VALUE | COMMENT |
 |--------|---------------|---------|
 | `CLIENT_ID` | 1234567890 | Get this from Spotify Dashboard |
 | `CLIENT_SECRET` | 1234567890 | Get this from Spotify Dashboard |
-| `SONG_DIR` | ~/Music | No trailing slash! |
+| `SONG_DIR` | /music | No trailing slash! |
 | `SONG_FORMAT` | mp3 | Options: mp3, m4a, opus |
 | `CHECK_EVERY_DAYS` | 1 | Frequency to check playlists. Maximum of 7 days. |

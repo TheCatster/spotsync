@@ -1,0 +1,19 @@
+version: "3"
+services:
+  spotsync:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/data
+      - ~/Music:/music
+    environment:
+      # Get from Spotify Developer dashboard
+      - CLIENT_ID=1234567890
+      - CLIENT_SECRET=1234567890
+      # For the container's side (exists due to non-docker version).
+      # Make sure there is no trailing slash!
+      - SONG_DIR=/music
+      # mp3, m4a, opus
+      - SONG_FORMAT=mp3
+      # Frequency to check playlists. Maximum of 7 days.
+      - CHECK_EVERY_DAYS=1

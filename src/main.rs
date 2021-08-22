@@ -193,14 +193,26 @@ async fn compare_playlists(local: &[Song], remote: &[Song]) -> Vec<Song> {
 }
 
 async fn authenticate_spotify() -> Client {
-    dotenv::dotenv().expect("Could not read .env file!");
+    let dotenv_file = dotenv::dotenv();
 
-    match std::fs::read_to_string(".refresh_token") {
+    if dotenv_file.is_err() {
+        warn!("Could not read env file! Assuming in docker.");
+    }
+
+    // Create data directory if not available
+    let path = PathBuf::from("data/playlists");
+    let metadata = fs::metadata(path);
+    if metadata.is_err() {
+        let path = PathBuf::from("data/playlists");
+        std::fs::create_dir_all(path).unwrap();
+    };
+
+    match std::fs::read_to_string("data/.refresh_token") {
         Ok(_) => {
             info!(".refresh_token present, refreshing client.");
             Client::with_refresh(
                 ClientCredentials::from_env().expect("Cannot read env vars for SpotSync!"),
-                std::fs::read_to_string(".refresh_token").expect("Cannot read refresh token file!"),
+                std::fs::read_to_string("data/.refresh_token").expect("Cannot read refresh token file!"),
             )
         }
         Err(_) => {
@@ -247,7 +259,7 @@ async fn authenticate_spotify() -> Client {
             client.redirected(&redirect, &state).await.unwrap();
 
             write(
-                ".refresh_token",
+                "data/.refresh_token",
                 client
                     .refresh_token()
                     .await
@@ -335,14 +347,6 @@ fn local_playlist_make_if_not_exists(playlist: &PlaylistSimplified, song_dir: &s
     let metadata = fs::metadata(path);
     if metadata.is_err() {
         let path = PathBuf::from(format!("{}/{}", song_dir, &playlist.name));
-        std::fs::create_dir_all(path).unwrap();
-    };
-
-    // Create playlists' data directory if not available
-    let path = PathBuf::from("data/playlists");
-    let metadata = fs::metadata(path);
-    if metadata.is_err() {
-        let path = PathBuf::from("data/playlists");
         std::fs::create_dir_all(path).unwrap();
     };
 
