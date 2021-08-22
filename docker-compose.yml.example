@@ -3,10 +3,11 @@ services:
   spotsync:
     build: .
     restart: unless-stopped
-    user: "1000:1000"
+    tty: true
+    stdin_open: true
     volumes:
       - ./config:/app/data
-      - ~/Music:/music
+      - ./music:/music
     environment:
       # Get from Spotify Developer dashboard
       - CLIENT_ID=1234567890
