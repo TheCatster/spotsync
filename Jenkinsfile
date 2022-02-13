@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        docker {image "rust:nightly"}
+        docker {image "rustlang/rust:nightly"}
     }
 
     stages {
