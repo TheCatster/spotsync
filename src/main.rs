@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
     // Create data directory if not available
     let path = PathBuf::from("dataplaylists");
     let metadata = fs::metadata(path);
+
     if metadata.is_err() {
         let path = PathBuf::from("data/playlists");
         std::fs::create_dir_all(path).unwrap();
@@ -73,7 +74,10 @@ async fn main() -> Result<()> {
         })
         .level(LevelFilter::Error)
         .chain(io::stdout())
-        .chain(log_file("data/spotsync.log").expect("No permission to write to the current directory."))
+        .chain(
+            log_file("data/spotsync.log")
+                .expect("No permission to write to the current directory."),
+        )
         .apply()
         .expect("Failed to dispatch Fern logger!");
 
@@ -212,7 +216,8 @@ async fn authenticate_spotify() -> Client {
             info!(".refresh_token present, refreshing client.");
             Client::with_refresh(
                 ClientCredentials::from_env().expect("Cannot read env vars for SpotSync!"),
-                std::fs::read_to_string("data/.refresh_token").expect("Cannot read refresh token file!"),
+                std::fs::read_to_string("data/.refresh_token")
+                    .expect("Cannot read refresh token file!"),
             )
         }
         Err(_) => {

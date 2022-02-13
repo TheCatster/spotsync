@@ -1,7 +1,7 @@
 [package]
 name = "spotsync"
 version = "0.2.0"
-edition = "2018"
+edition = "2021"
 authors = ["Daniel Rose <danielrose@member.fsf.org>"]
 description = "Sync your Spotify and local playlists."
 homepage = "https://sr.ht/~thecatster/spotsync"
