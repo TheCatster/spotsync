@@ -3,9 +3,13 @@ sources:
   - https://git.sr.ht/~thecatster/spotsync
 secrets:
   - 3ec8d6c4-470d-4198-8b1c-b3c772f8fff3
+  - 3979fb70-5ac8-4454-a929-87875243a4d5
 tasks:
   - mirror: |
       cd spotsync
       git remote add github git@github.com:thecatster/spotsync
       ssh-keyscan github.com >> ~/.ssh/known_hosts
       git push -f github master
+  - build: |
+      TOKEN="$(cat ~/.jenkins_token)"
+      curl -X POST https://jks.daniilrose.com/job/spotsync/build?token=$TOKEN
